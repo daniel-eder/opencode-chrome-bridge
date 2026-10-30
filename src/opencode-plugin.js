@@ -16,6 +16,19 @@ import {
   materializePageAssetBundle,
   materializeReadPageArtifacts
 } from "./workspace-artifacts.js";
+import {
+  buildTranslatorDetectExpression,
+  buildTranslatorScrapeExpression,
+  getZoteroTranslatorCode,
+  getZoteroTranslators,
+  matchTranslatorsForUrl,
+  normalizeScrapedItems,
+  parseTranslatorDriverResult,
+  randomConnectorId,
+  zoteroLatestItem,
+  zoteroSaveItems,
+  zoteroSavePdfAttachment
+} from "./zotero-connector.js";
 // Tool metadata lives in ./tool-metadata.js: OpenCode's plugin loader treats
 // every module export as a plugin entrypoint, so the entrypoint must not
 // re-export non-function values.
@@ -622,6 +635,27 @@ export default async function OpenCodeChromeBridgePlugin() {
           );
           const file = await writePdfDataUrlToFile(result.dataUrl, outputPath);
           return JSON.stringify({ ...file, format: result.format }, null, 2);
+        }
+      }),
+      chrome_zotero_detect: tool({
+        description: "Detect which Zotero translator matches a Chrome tab and run its real detectWeb in the page to determine the Zotero item type.",
+        args: {
+          tabId: schema.number().int().describe("Chrome tab id to detect the Zotero translator for.")
+        },
+        async execute(args) {
+          return JSON.stringify(await detectZoteroTranslator(args.tabId), null, 2);
+        }
+      }),
+      chrome_zotero_save: tool({
+        description: "Save a Chrome tab to Zotero using the real matching translator (detectWeb/scrape in-page), optionally attaching a rendered PDF. Uses the local Zotero connector API, bypassing the connector's native UI.",
+        args: {
+          tabId: schema.number().int().describe("Chrome tab id to save to Zotero."),
+          attachPdf: schema.boolean().default(true).describe("Render the page to PDF and attach it to the Zotero item in the same session."),
+          translatorID: schema.string().optional().describe("Force a specific Zotero translator id instead of auto-detecting."),
+          pdfTitle: schema.string().optional().describe("Attachment title for the PDF. Defaults to '<item title>.pdf'.")
+        },
+        async execute(args) {
+          return JSON.stringify(await saveTabToZotero(args), null, 2);
         }
       }),
       chrome_click: tool({
@@ -1415,6 +1449,8 @@ const APPROVAL_METADATA = {
   chrome_screenshot: (args) => ({ action: "Capture a screenshot of the page", tabId: args.tabId, outputPath: args.outputPath }),
   chrome_screenshot_region: (args) => ({ action: "Capture a screenshot region of the page", tabId: args.tabId, outputPath: args.outputPath }),
   chrome_print_pdf: (args) => ({ action: "Render the page to a PDF file", tabId: args.tabId, outputPath: args.outputPath }),
+  chrome_zotero_detect: (args) => ({ action: "Detect the Zotero translator for the page", tabId: args.tabId }),
+  chrome_zotero_save: (args) => ({ action: "Save the page to Zotero with its translator", tabId: args.tabId, attachPdf: args.attachPdf }),
   chrome_downloads_list: (args) => ({ action: "List the user's Chrome downloads", query: args.query })
 };
 
@@ -2201,6 +2237,103 @@ function assertPathWithin(root, candidate, fieldName) {
   const relative = path.relative(root, candidate);
   if (relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative))) return;
   throw new Error(`${fieldName} must be within the project directory: ${root}`);
+}
+
+// Runs a Zotero translator's real detectWeb() in the page. The translator code
+// is fetched from the local Zotero client (the same code the installed
+// connector uses), and detectWeb runs against the live authenticated DOM, so
+// the item type is the translator's own decision - not a handmade guess.
+async function detectZoteroTranslator(tabId) {
+  if (!Number.isInteger(tabId)) throw new Error("tabId must be an integer");
+  const tab = await bridgeCommand("getTab", { tabId });
+  if (typeof tab?.url !== "string" || tab.url.length === 0) {
+    throw new Error(`Tab ${tabId} does not expose a page URL`);
+  }
+  const translators = await getZoteroTranslators();
+  const candidates = matchTranslatorsForUrl(translators, tab.url, { limit: 5 });
+  if (candidates.length === 0) {
+    return { url: tab.url, title: tab.title ?? null, candidates: [], detected: null };
+  }
+  const attempts = [];
+  for (const candidate of candidates.slice(0, 3)) {
+    const code = await getZoteroTranslatorCode(candidate.translatorID);
+    const raw = await bridgeCommand("evaluate", {
+      tabId,
+      expression: buildTranslatorDetectExpression(code)
+    }, { timeoutMs: 30000 });
+    const parsed = parseTranslatorDriverResult(typeof raw === "string" ? raw : JSON.stringify(raw));
+    attempts.push({ translatorID: candidate.translatorID, label: candidate.label, itemType: parsed.itemType ?? false });
+    if (parsed.itemType && parsed.itemType !== "multiple") {
+      return { url: tab.url, title: tab.title ?? null, candidates, detected: attempts[attempts.length - 1] };
+    }
+  }
+  return { url: tab.url, title: tab.title ?? null, candidates, detected: attempts[attempts.length - 1] ?? null };
+}
+
+async function saveTabToZotero({ tabId, attachPdf = true, translatorID, pdfTitle }) {
+  if (!Number.isInteger(tabId)) throw new Error("tabId must be an integer");
+  const tab = await bridgeCommand("getTab", { tabId });
+  if (typeof tab?.url !== "string" || tab.url.length === 0) {
+    throw new Error(`Tab ${tabId} does not expose a page URL`);
+  }
+  let translator;
+  if (typeof translatorID === "string" && translatorID.length > 0) {
+    translator = { translatorID, label: null };
+  } else {
+    const detection = await detectZoteroTranslator(tabId);
+    if (!detection.detected || detection.detected.itemType === false) {
+      throw new Error(`No Zotero translator matched ${tab.url}; open a translatable page or save it manually`);
+    }
+    if (detection.detected.itemType === "multiple") {
+      throw new Error("The translator offers multiple items here; open a single section (e.g. point A) and retry");
+    }
+    translator = detection.detected;
+  }
+  const code = await getZoteroTranslatorCode(translator.translatorID);
+  const raw = await bridgeCommand("evaluate", {
+    tabId,
+    expression: buildTranslatorScrapeExpression(code)
+  }, { timeoutMs: 30000 });
+  const parsed = parseTranslatorDriverResult(typeof raw === "string" ? raw : JSON.stringify(raw));
+  const connectorBase = randomConnectorId("item");
+  const items = normalizeScrapedItems(parsed.items, { url: tab.url, connectorId: connectorBase });
+  const sessionID = randomConnectorId("session");
+  await zoteroSaveItems({ items, uri: tab.url, sessionID });
+  let pdfAttached = false;
+  if (attachPdf !== false) {
+    const pdf = await bridgeCommand("printPdf", {
+      tabId,
+      landscape: false,
+      displayHeaderFooter: true,
+      printBackground: true,
+      scale: 1
+    }, { timeoutMs: 60000 });
+    const base64 = String(pdf?.dataUrl ?? "").split(",")[1] ?? "";
+    if (base64.length === 0) throw new Error("printPdf returned no PDF data for the Zotero attachment");
+    const pdfBytes = Buffer.from(base64, "base64");
+    const attachmentTitle = typeof pdfTitle === "string" && pdfTitle.length > 0
+      ? pdfTitle
+      : `${items[0].title}.pdf`;
+    await zoteroSavePdfAttachment({
+      pdfBytes,
+      sessionID,
+      parentItemID: items[0].id,
+      title: attachmentTitle,
+      url: tab.url
+    });
+    pdfAttached = true;
+  }
+  const latest = await zoteroLatestItem().catch(() => null);
+  return {
+    saved: true,
+    translator: translator.label ?? translator.translatorID,
+    translatorID: translator.translatorID,
+    itemType: items[0].itemType,
+    title: items[0].title,
+    sessionID,
+    pdfAttached,
+    zoteroKey: latest?.key ?? null
+  };
 }
 
 async function loadOpenCodeTool() {
