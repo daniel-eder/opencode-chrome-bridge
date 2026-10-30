@@ -265,4 +265,6 @@ test("Windows setup does not pass arguments through shell true", async () => {
   const source = await readFile(path.join(repoRoot, "scripts", "setup-windows.mjs"), "utf8");
   assert.doesNotMatch(source, /shell:\s*true/u);
   assert.match(source, /ComSpec|cmd\.exe/u);
+  assert.match(source, /windowsVerbatimArguments:\s*true/u, "cmd.exe must receive verbatim arguments so inner quotes survive");
+  assert.match(source, /`"\$\{createCmdInvocation\(command, commandArgs\)\}"`/u, "cmd /s only strips one outer quote pair");
 });

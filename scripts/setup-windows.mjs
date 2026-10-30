@@ -91,10 +91,14 @@ function executeWindowsCommand(command, commandArgs, options) {
     return spawnAndWait(command, commandArgs, options);
   }
   const commandProcessor = process.env.ComSpec || "cmd.exe";
+  // Node escapes embedded quotes with backslashes, but cmd.exe has no such
+  // escape, so it would see a literal \" and fail to find the command. Pass the
+  // arguments verbatim and wrap the invocation in the extra quote pair that
+  // cmd /s strips before parsing.
   return spawnAndWait(
     commandProcessor,
-    ["/d", "/s", "/c", createCmdInvocation(command, commandArgs)],
-    options
+    ["/d", "/s", "/c", `"${createCmdInvocation(command, commandArgs)}"`],
+    { ...options, windowsVerbatimArguments: true }
   );
 }
 
