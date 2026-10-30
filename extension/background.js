@@ -2196,10 +2196,31 @@ async function currentPageBinding(tabId, knownUrl) {
     try { documentId = (await chrome.webNavigation.getFrame({ tabId, frameId: 0 }))?.documentId; } catch {}
   }
   const navigationGeneration = navigationSequences.get(tabId) ?? 0;
+  let scopeUrl = typeof knownUrl === "string" && knownUrl.length > 0 ? knownUrl : null;
+  if (scopeUrl === null) {
+    try {
+      const tab = await chrome.tabs.get(tabId);
+      scopeUrl = (typeof tab.url === "string" && tab.url.length > 0 ? tab.url : null)
+        ?? (typeof tab.pendingUrl === "string" && tab.pendingUrl.length > 0 ? tab.pendingUrl : null);
+    } catch {
+      scopeUrl = null;
+    }
+  }
+  if (typeof scopeUrl === "string" && !/^https?:\/\//iu.test(scopeUrl)) {
+    try {
+      const tab = await chrome.tabs.get(tabId);
+      if (typeof tab.pendingUrl === "string" && /^https?:\/\//iu.test(tab.pendingUrl)) {
+        scopeUrl = tab.pendingUrl;
+      }
+    } catch {}
+  }
+  if (typeof scopeUrl !== "string" || scopeUrl.length === 0) {
+    throw new Error(`Chrome tab ${tabId} has no committed URL yet; retry after navigation commits`);
+  }
   return {
     documentId: typeof documentId === "string" ? documentId : `generation:${navigationGeneration}`,
     navigationGeneration,
-    pageScope: canonicalPermissionScope(knownUrl ?? (await chrome.tabs.get(tabId)).url),
+    pageScope: canonicalPermissionScope(scopeUrl),
     tabId
   };
 }
@@ -2267,6 +2288,7 @@ function tabInfo(tab) {
     active: tab.active === true,
     id: tab.id,
     index: tab.index,
+    pendingUrl: typeof tab.pendingUrl === "string" ? tab.pendingUrl : null,
     title: tab.title,
     url: tab.url,
     windowId: tab.windowId

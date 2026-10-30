@@ -446,6 +446,46 @@ test("new-tab redirects are re-evaluated before returning page metadata", async 
   );
 });
 
+test("open survives a pending new-tab URL by falling back to the requested destination", async () => {
+  const plugin = await OpenCodeChromeBridgePlugin();
+  const asks = [];
+  const bridge = installBridge(({ method, params }) => {
+    if (method === "createTab") return { id: 13, url: params.url };
+    if (method === "getTab") return { id: 13, url: "", pendingUrl: "" };
+    throw new Error(`unexpected ${method}`);
+  });
+  let result;
+  try {
+    result = await plugin.tool.chrome_open.execute({ url: "https://example.com/app" }, context(asks));
+  } finally {
+    bridge.restore();
+  }
+  assert.match(String(result), /example\.com/);
+  assert.deepEqual(
+    asks.filter((entry) => entry.permission === "browser.origin").map((entry) => entry.patterns),
+    [["https://example.com:443/app"]]
+  );
+});
+
+test("tab scope prefers a committed pendingUrl when the committed URL is not ready", async () => {
+  const plugin = await OpenCodeChromeBridgePlugin();
+  const asks = [];
+  const bridge = installBridge(({ method }) => {
+    if (method === "getTab") return { id: 7, pendingUrl: "https://example.com/app", url: "" };
+    if (method === "pageText") return { text: "ok", url: "https://example.com/app" };
+    throw new Error(`unexpected ${method}`);
+  });
+  try {
+    await plugin.tool.chrome_page_text.execute({ tabId: 7, maxChars: 100 }, context(asks));
+  } finally {
+    bridge.restore();
+  }
+  assert.deepEqual(
+    asks.filter((entry) => entry.permission === "browser.origin").map((entry) => entry.patterns),
+    [["https://example.com:443/app"]]
+  );
+});
+
 test("explicit session grants are cached only inside their context sessionID", async () => {
   pluginModule.clearPageOriginSessionGrants();
   const plugin = await OpenCodeChromeBridgePlugin();

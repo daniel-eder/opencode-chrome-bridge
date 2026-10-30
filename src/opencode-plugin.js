@@ -1823,9 +1823,22 @@ async function resolvePostExecutionPageScopes(name, args, result) {
     }
     const createdTabs = Array.isArray(output?.tabs) ? output.tabs : [output];
     const scopes = [];
+    const pushScopeForUrl = (value) => {
+      if (typeof value === "string" && isPagePermissionUrl(value)) scopes.push(canonicalPageScope(value));
+    };
     for (const tab of createdTabs) {
-      if (Number.isInteger(tab?.id)) scopes.push(await scopeForTab(tab.id));
-      else if (typeof tab?.url === "string") scopes.push(canonicalPageScope(tab.url));
+      if (Number.isInteger(tab?.id)) {
+        try {
+          scopes.push(await scopeForTab(tab.id));
+          continue;
+        } catch {
+          // The tab was just created and its URL may not have committed yet.
+          // Fall through to the creation-result/request URLs below.
+        }
+      }
+      if (typeof tab?.url === "string" && isPagePermissionUrl(tab.url)) scopes.push(canonicalPageScope(tab.url));
+      else if (typeof tab?.pendingUrl === "string" && isPagePermissionUrl(tab.pendingUrl)) scopes.push(canonicalPageScope(tab.pendingUrl));
+      else pushScopeForUrl(args.url);
     }
     return scopes;
   }
@@ -1874,9 +1887,23 @@ async function scopesForTabIds(tabIds, pageMetadata) {
 }
 
 async function scopeForTab(tabId, pageMetadata) {
-  const tab = await tabMetadata(tabId, pageMetadata);
-  if (typeof tab?.url !== "string") throw new Error(`Chrome tab ${tabId} did not expose a page URL`);
-  return canonicalPageScope(tab.url);
+  const pickHttpUrl = (tab) => {
+    if (tab && typeof tab.url === "string" && isPagePermissionUrl(tab.url)) return tab.url;
+    if (tab && typeof tab.pendingUrl === "string" && isPagePermissionUrl(tab.pendingUrl)) return tab.pendingUrl;
+    return null;
+  };
+  let tab = await tabMetadata(tabId, pageMetadata);
+  let url = pickHttpUrl(tab);
+  if (url === null) {
+    tab = await bridgeCommand("getTab", { tabId });
+    pageMetadata?.set?.(tabId, tab);
+    url = pickHttpUrl(tab);
+  }
+  if (url === null) {
+    const seen = typeof tab?.url === "string" && tab.url.length > 0 ? tab.url : typeof tab?.pendingUrl === "string" ? tab.pendingUrl : "empty";
+    throw new Error(`Chrome tab ${tabId} has no committed http(s) URL yet (saw: ${seen}); retry after navigation commits`);
+  }
+  return canonicalPageScope(url);
 }
 
 async function tabMetadata(tabId, cache) {
