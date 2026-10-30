@@ -1,15 +1,13 @@
-// Minimal client for the OpenCode 2 local service API.
+// Minimal client for the OpenCode local service API.
 //
-// OpenCode 1 handed tools a `context.ask()` helper that raised the native
-// "allow once / allow always / deny" prompt. OpenCode 2 dropped that helper from
-// the tool context, but the same permission engine is still reachable over the
-// local HTTP API (`POST /api/session/{id}/permission`). Rebuilding `ask()` on
-// top of it keeps the plugin's deny-by-default policy intact instead of
-// silently downgrading it.
+// The tool context has no `ask()` helper, but the same permission engine that
+// drives the native "allow once / allow always / deny" prompt is reachable
+// over the local HTTP API (`POST /api/session/{id}/permission`). Rebuilding
+// `ask()` on top of it keeps the plugin's deny-by-default policy intact
+// instead of silently downgrading it.
 //
-// The service publishes its URL and password in a state file, exactly as
-// @opencode-ai/client's service discovery does; the plugin runs inside that same
-// server process, so the call never leaves the machine.
+// The service publishes its URL and password in a state file; the plugin runs
+// inside that same server process, so the call never leaves the machine.
 import os from "node:os";
 import path from "node:path";
 import { readFile } from "node:fs/promises";
@@ -74,17 +72,24 @@ export async function resolveServiceEndpoint(options = {}) {
 
 async function probeServiceEndpoint({ fetchImpl = fetch, ...readOptions } = {}) {
   const endpoint = await readServiceRegistration(readOptions);
-  const response = await fetchImpl(`${endpoint.url}/api/health`, {
-    headers: { authorization: endpoint.authorization },
-    signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS)
-  });
-  if (!response.ok) {
-    throw new Error(`OpenCode service health check failed with status ${response.status}`);
+  // OpenCode >=2.2 exposes server info at /api/info; older builds probed
+  // /api/health. Try the current endpoint first and fall back for compat.
+  for (const probePath of ["/api/info", "/api/health"]) {
+    const response = await fetchImpl(`${endpoint.url}${probePath}`, {
+      headers: { authorization: endpoint.authorization },
+      signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS)
+    });
+    if (response.ok) return endpoint;
+    // Only fall back on 404 (unknown route). Any other failure (401, 500,
+    // network) is a real health problem and should surface immediately.
+    if (response.status !== 404) {
+      throw new Error(`OpenCode service health check failed with status ${response.status}`);
+    }
   }
-  return endpoint;
+  throw new Error("OpenCode service health check failed with status 404");
 }
 
-// Blocks until the user answers, mirroring OpenCode 1's context.ask(). Returns
+// Blocks until the user answers the native permission prompt. Returns
 // nothing on approval and throws on denial so callers can stay written as
 // `await context.ask(...)`.
 export async function requestPermission(request, options = {}) {
