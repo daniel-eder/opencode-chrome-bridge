@@ -46,6 +46,10 @@ await access(path.join(repoRoot, "extension", "managed_schema.json"));
 await access(path.join(repoRoot, "extension", "images", "cursor-chat.png"));
 await access(path.join(repoRoot, "native-host", "opencode-chrome-native-host.mjs"));
 await access(path.join(repoRoot, "src", "opencode-plugin.js"));
+await access(path.join(repoRoot, "src", "plugin-entry.js"));
+if (packageJson.exports?.["./server"] !== "./src/plugin-entry.js") {
+  throw new Error('package.json must expose the OpenCode entrypoint as exports["./server"]');
+}
 
 assertExactStringSet(manifest.permissions, expectedPermissions, "extension permissions");
 assertExactStringSet(manifest.host_permissions, ["<all_urls>"], "extension host permissions");
@@ -110,17 +114,22 @@ if (extensionId !== expectedExtensionId) {
 }
 
 const opencodeConfig = parseJsonc(await readInstalledFile(opencodeConfigPath(), "OpenCode config", "npm run install:opencode"));
-if (!Array.isArray(opencodeConfig.plugin) || !opencodeConfig.plugin.includes(repoRoot)) {
-  throw new Error(`OpenCode config must include plugin path ${repoRoot}`);
-}
-// OpenCode 2 reads the `plugins` key and needs the v2 entrypoint directly; the
-// package root would resolve to the OpenCode 1 entry through package exports.
-const opencode2PluginPath = path.join(repoRoot, "src", "plugin-entry-v2.js");
-const opencode2Entries = (opencodeConfig.plugins ?? []).map(
+// OpenCode reads the `plugins` key and resolves the package root through the
+// `./server` export to the plugin entrypoint. File paths are skipped because
+// OpenCode only loads directories.
+const pluginEntries = (opencodeConfig.plugins ?? []).map(
   (entry) => (typeof entry === "string" ? entry : entry?.package)
 );
-if (!Array.isArray(opencodeConfig.plugins) || !opencode2Entries.includes(opencode2PluginPath)) {
-  throw new Error(`OpenCode config must include plugins path ${opencode2PluginPath}`);
+if (!Array.isArray(opencodeConfig.plugins) || !pluginEntries.includes(repoRoot)) {
+  throw new Error(`OpenCode config must include plugins path ${repoRoot}`);
+}
+// The legacy `plugin` key is not installed anymore; anything left there would
+// only produce failed-to-load warnings.
+const legacyEntries = Array.isArray(opencodeConfig.plugin)
+  ? opencodeConfig.plugin.map((entry) => (typeof entry === "string" ? entry : entry?.package))
+  : [];
+if (legacyEntries.includes(repoRoot)) {
+  throw new Error(`OpenCode config still lists this repository under the legacy plugin key; re-run npm run install:opencode to remove it`);
 }
 
 const hostPath = path.join(repoRoot, "native-host", "opencode-chrome-native-host.mjs");
@@ -173,8 +182,7 @@ console.log(JSON.stringify({
   ok: true,
   extensionId,
   nativeHostName: NATIVE_HOST_NAME,
-  opencodePluginPath: repoRoot,
-  opencode2PluginPath
+  pluginPath: repoRoot
 }, null, 2));
 
 async function checkJson(relativePath) {

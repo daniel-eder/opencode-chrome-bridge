@@ -1,16 +1,15 @@
-// OpenCode 2 adapter.
+// OpenCode plugin module.
 //
-// OpenCode 2 replaced the v1 plugin contract wholesale: a plugin is now a
-// `{ id, setup }` module that registers tools through `ctx.tool.transform()`
-// instead of a factory returning a `{ tool: { ... } }` map, tool inputs are JSON
-// Schema instead of Zod shapes, and the tool context lost `ask()`, `directory`
-// and `metadata()`.
+// The plugin is a `{ id, setup }` module that registers tools through
+// `ctx.tool.transform()`. Tool inputs are JSON Schema, the project directory
+// is resolved from the session, and approval prompts go through OpenCode's
+// permission engine on the local service (see ./opencode-service-client.js).
 //
-// Rather than fork the implementation, this module reuses the v1 tool
-// definitions verbatim — including the approval wrapper in ./opencode-plugin.js
-// that makes every browser tool deny-by-default — and translates the surrounding
+// Tool behaviour itself lives in ./opencode-plugin.js, which defines every
+// `chrome_*` tool once — including the approval wrapper that makes every
+// browser tool deny-by-default. This module only translates that surrounding
 // contract. That keeps one source of truth for tool behaviour and security
-// policy across both OpenCode generations.
+// policy.
 import createChromeBridgePlugin from "./opencode-plugin.js";
 import { requestPermission } from "./opencode-service-client.js";
 
@@ -24,14 +23,14 @@ export default {
     const directories = new Map();
     const registration = await context.tool.transform((draft) => {
       for (const [name, definition] of Object.entries(tools)) {
-        draft.add(toV2Tool(name, definition, tool.schema, context, directories));
+        draft.add(toPluginTool(name, definition, tool.schema, context, directories));
       }
     });
     return () => registration.dispose();
   }
 };
 
-export function toV2Tool(name, definition, schema, pluginContext, directories) {
+export function toPluginTool(name, definition, schema, pluginContext, directories) {
   return {
     name,
     description: definition.description,
@@ -42,8 +41,8 @@ export function toV2Tool(name, definition, schema, pluginContext, directories) {
     // per-origin page scoping assumes tools are invoked one call at a time.
     options: { codemode: false },
     async execute(input, toolContext) {
-      const context = await createV1ToolContext(toolContext, pluginContext, directories);
-      return toV2Result(await definition.execute(input ?? {}, context));
+      const context = await createToolContext(toolContext, pluginContext, directories);
+      return toToolResult(await definition.execute(input ?? {}, context));
     }
   };
 }
@@ -54,7 +53,7 @@ export function toInputSchema(args, schema) {
   return schema.toJSONSchema(schema.strictObject(args ?? {}), { io: "input" });
 }
 
-export async function createV1ToolContext(toolContext, pluginContext, directories, options = {}) {
+export async function createToolContext(toolContext, pluginContext, directories, options = {}) {
   const sessionID = toolContext?.sessionID;
   const directory = await resolveSessionDirectory(sessionID, pluginContext, directories);
   return {
@@ -63,13 +62,13 @@ export async function createV1ToolContext(toolContext, pluginContext, directorie
     agent: toolContext?.agent,
     directory,
     worktree: directory,
-    // OpenCode 2 does not hand tools an abort signal. A signal that never
-    // aborts keeps the v1 call sites working; their own timeouts still apply.
+    // OpenCode does not hand tools an abort signal. A signal that never
+    // aborts keeps the tool call sites working; their own timeouts still apply.
     abort: toolContext?.abort ?? toolContext?.signal ?? new AbortController().signal,
     metadata(update) {
       const progress = toolContext?.progress;
       if (typeof progress !== "function") return;
-      // Fire-and-forget: v1's metadata() is synchronous and callers do not await.
+      // Fire-and-forget: metadata() is synchronous and callers do not await.
       void Promise.resolve(progress({ ...update?.metadata, title: update?.title })).catch(() => {});
     },
     ask(input) {
@@ -102,7 +101,7 @@ async function resolveSessionDirectory(sessionID, pluginContext, directories) {
   return directory;
 }
 
-export function toV2Result(result) {
+export function toToolResult(result) {
   if (typeof result === "string") return { content: result };
   const content = [{ type: "text", text: result.output }];
   for (const attachment of result.attachments ?? []) {

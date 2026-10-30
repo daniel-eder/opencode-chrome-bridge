@@ -18,7 +18,7 @@ The native host listens on `127.0.0.1` and requires a per-process bearer token s
 
 As an additional layer, every browser tool except `chrome_status` requires an OpenCode allow once / allow always / deny decision before execution. The gate fails closed: denying, or running on a host without permission-prompt support, aborts the action before any command reaches the bridge. A user can deliberately persist an allow-always grant. This mitigates prompt injection from untrusted page content, but is not a substitute for loading the extension only in trusted profiles.
 
-The same gate applies on OpenCode 2, which removed `context.ask()` from the tool context. There the prompt is raised through OpenCode 2's own permission engine at `POST /api/session/{id}/permission` on the local service, authenticated with HTTP Basic against `127.0.0.1` using the URL and password OpenCode writes to its private state directory. The plugin refuses a registration whose URL is not loopback, and an unreachable or unauthenticated service aborts the action instead of executing it unapproved.
+The tool context has no `ask()` helper. There the prompt is raised through OpenCode's own permission engine at `POST /api/session/{id}/permission` on the local service, authenticated with HTTP Basic against `127.0.0.1` using the URL and password OpenCode writes to its private state directory. The plugin refuses a registration whose URL is not loopback, and an unreachable or unauthenticated service aborts the action instead of executing it unapproved.
 
 Only install the extension and plugin on trusted machines and Chrome profiles. Never publish bridge state files, screenshots, HAR files, traces, or logs that may contain browser data.
 

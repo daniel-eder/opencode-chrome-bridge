@@ -7,7 +7,7 @@
   "main": "src/plugin-entry.js",
   "exports": {
     ".": "./src/plugin-entry.js",
-    "./v2": "./src/plugin-entry-v2.js"
+    "./server": "./src/plugin-entry.js"
   },
   "scripts": {
     "check": "node scripts/check-syntax.mjs",

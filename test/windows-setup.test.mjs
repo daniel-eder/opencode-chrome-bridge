@@ -15,14 +15,14 @@ test("OpenCode config keeps unrelated settings and adds the plugin once", () => 
   const parsed = parseJsonc(`{
     // existing user preference
     "theme": "dark",
-    "plugin": ["C:\\\\Tools\\\\existing"]
+    "plugins": ["C:\\\\Tools\\\\existing"]
   }`);
   const pluginPath = "C:\\Users\\Ada Example\\bridge";
   const once = withPluginPath(parsed, pluginPath);
   const twice = withPluginPath(once, pluginPath);
 
   assert.equal(twice.theme, "dark");
-  assert.deepEqual(twice.plugin, ["C:\\Tools\\existing", pluginPath]);
+  assert.deepEqual(twice.plugins, ["C:\\Tools\\existing", pluginPath]);
 });
 
 test("invalid OpenCode JSONC fails instead of being overwritten", () => {
@@ -32,13 +32,19 @@ test("invalid OpenCode JSONC fails instead of being overwritten", () => {
 test("OpenCode JSONC accepts comments and trailing commas from the official format", () => {
   assert.deepEqual(parseJsonc(`{
     // OpenCode documents trailing commas in .jsonc files.
-    "plugin": ["C:\\\\Tools\\\\existing",],
+    "plugins": ["C:\\\\Tools\\\\existing",],
     "server": {
       "port": 4096,
     },
   }`), {
-    plugin: ["C:\\Tools\\existing"],
+    plugins: ["C:\\Tools\\existing"],
     server: { port: 4096 }
+  });
+});
+
+test("OpenCode JSONC accepts a UTF-8 BOM written by Windows editors", () => {
+  assert.deepEqual(parseJsonc(`${String.fromCharCode(0xFEFF)}{ "plugins": ["C:\\\\bridge"] }`), {
+    plugins: ["C:\\bridge"]
   });
 });
 
@@ -46,7 +52,7 @@ test("OpenCode plugin installation preserves unrelated JSONC comments", async ()
   const original = `{
   // Keep this user explanation.
   "theme": "dark",
-  "plugin": [
+  "plugins": [
     // Existing plugin must remain first.
     "C:\\\\Tools\\\\existing",
   ],
@@ -66,11 +72,11 @@ test("OpenCode plugin installation preserves unrelated JSONC comments", async ()
   assert.match(written, /Keep this user explanation/u);
   assert.match(written, /Existing plugin must remain first/u);
   assert.equal(parseJsonc(written).theme, "dark");
-  assert.deepEqual(parseJsonc(written).plugin, ["C:\\Tools\\existing", "C:\\Users\\Ada\\bridge"]);
+  assert.deepEqual(parseJsonc(written).plugins, ["C:\\Tools\\existing", "C:\\Users\\Ada\\bridge"]);
 });
 
 test("OpenCode plugin installation refuses to replace a non-array plugin setting", () => {
-  assert.throws(() => withPluginPath({ plugin: "C:\\Tools\\existing" }, "C:\\bridge"), /plugin.*array/iu);
+  assert.throws(() => withPluginPath({ plugins: "C:\\Tools\\existing" }, "C:\\bridge"), /plugin.*array/iu);
   assert.throws(() => withPluginPath([], "C:\\bridge"), /config.*object/iu);
 });
 
@@ -88,13 +94,13 @@ test("OpenCode plugin installation preserves CRLF and can add a missing plugin k
 
   assert.equal(written.replaceAll("\r\n", "").includes("\n"), false, "installer must not introduce mixed line endings");
   assert.match(written, /Windows config/u);
-  assert.deepEqual(parseJsonc(written).plugin, ["C:\\bridge"]);
+  assert.deepEqual(parseJsonc(written).plugins, ["C:\\bridge"]);
 });
 
 test("OpenCode plugin installation rejects duplicate plugin keys instead of editing the wrong one", async () => {
   const original = `{
-    "plugin": "C:\\\\first",
-    "plugin": ["C:\\\\second"]
+    "plugins": "C:\\\\first",
+    "plugins": ["C:\\\\second"]
   }`;
   let wrote = false;
 
@@ -105,7 +111,7 @@ test("OpenCode plugin installation rejects duplicate plugin keys instead of edit
     readFile: async () => original,
     writeFile: async () => { wrote = true; },
     mkdir: async () => {}
-  }), /duplicate plugin keys/iu);
+  }), /duplicate plugins keys/iu);
   assert.equal(wrote, false);
 });
 
