@@ -17,7 +17,7 @@ export const TAB_SCOPED_TOOLS = new Set([
   "chrome_hover", "chrome_keypress", "chrome_move", "chrome_network_requests",
   "chrome_page_assets",
   "chrome_page_text", "chrome_read_page", "chrome_reload", "chrome_reset_viewport",
-  "chrome_screenshot", "chrome_screenshot_region", "chrome_scroll", "chrome_set_viewport",
+  "chrome_screenshot", "chrome_screenshot_region", "chrome_print_pdf", "chrome_scroll", "chrome_set_viewport",
   "chrome_subscribe_cdp", "chrome_tab_context", "chrome_type", "chrome_unsubscribe_cdp",
   "chrome_upload_files", "chrome_wait_for", "chrome_wizard_step", "chrome_cursor_state",
   "chrome_favicon_badge", "chrome_webmcp_invoke", "chrome_webmcp_list"
@@ -90,6 +90,7 @@ export const TOOL_CAPABILITY_REQUIREMENTS = Object.freeze({
   chrome_schedules: capabilities("browser.schedules"),
   chrome_screenshot: capabilities("browser.screenshots", "browser.tabs", "browser.windows"),
   chrome_screenshot_region: capabilities("browser.cdp", "browser.screenshots", "browser.tabs", "browser.windows"),
+  chrome_print_pdf: capabilities("browser.cdp", "browser.screenshots", "browser.tabs"),
   chrome_scroll: capabilities("browser.cdp", "browser.tabs"),
   chrome_set_viewport: capabilities("browser.cdp", "browser.tabs"),
   chrome_set_window_state: capabilities("browser.windows"),

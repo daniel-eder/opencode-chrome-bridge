@@ -87,6 +87,7 @@ const EXPECTED_TOOL_CAPABILITIES = {
   chrome_schedules: caps("browser.schedules"),
   chrome_screenshot: caps("browser.screenshots", "browser.tabs", "browser.windows"),
   chrome_screenshot_region: caps("browser.cdp", "browser.screenshots", "browser.tabs", "browser.windows"),
+  chrome_print_pdf: caps("browser.cdp", "browser.screenshots", "browser.tabs"),
   chrome_scroll: caps("browser.cdp", "browser.tabs"),
   chrome_set_viewport: caps("browser.cdp", "browser.tabs"),
   chrome_set_window_state: caps("browser.windows"),

@@ -45,6 +45,7 @@ const MANAGED_GROUP_TITLE_PREFIX = "OpenCode · ";
 const MAX_CAPTURE_DIMENSION = 10000;
 const MAX_CAPTURE_AREA = 25_000_000;
 const MAX_SCREENSHOT_BASE64_CHARS = Math.ceil((10 * 1024 * 1024) / 3) * 4;
+const MAX_PDF_BASE64_CHARS = Math.ceil((10 * 1024 * 1024) / 3) * 4;
 const MAX_TEXT_CHARS = 100_000;
 const MAX_EXPRESSION_CHARS = 200_000;
 const MAX_KEY_CHARS = 100;
@@ -172,7 +173,7 @@ const ORIGIN_SCOPED_COMMANDS = new Set([
   "accessibilityTree", "activateTab", "back", "browserBatch", "cdpCommand", "click", "clickElement",
   "closeTab", "domContent", "doubleClick", "evaluate", "fillElement", "findElements",
   "fileUploadCommit", "forward", "getConsoleLogs", "getTab", "hover", "keypress", "moveSequence",
-  "navigate", "networkRequests", "pageText", "readPage", "reload", "resetViewport",
+  "navigate", "networkRequests", "pageText", "printPdf", "readPage", "reload", "resetViewport",
   "pageAssets",
   "webMcpList", "webMcpInvoke",
   "workflowRun",
@@ -185,7 +186,7 @@ const ALLOWED_RAW_PAGE_CDP_METHODS = new Set([
 ]);
 const NAVIGATION_BARRIER_COMMANDS = new Set([
   "cdpCommand", "click", "clickElement", "doubleClick", "evaluate", "fillElement", "hover",
-  "getConsoleLogs", "keypress", "moveSequence", "networkRequests", "screenshotRegion", "scroll",
+  "getConsoleLogs", "keypress", "moveSequence", "networkRequests", "printPdf", "screenshotRegion", "scroll",
   "pageAssets", "webMcpList", "webMcpInvoke",
   "setViewport", "resetViewport", "subscribeCdpEvents", "type", "unsubscribeCdpEvents"
 ]);
@@ -607,6 +608,8 @@ async function executeCommandCore(method, params, options = {}) {
       return captureScreenshot(params, options.signal, options.pageGuard);
     case "screenshotRegion":
       return captureScreenshotRegion(params, options.pageGuard);
+    case "printPdf":
+      return printPdf(params, options.pageGuard);
     case "getConsoleLogs":
       return getConsoleLogs(params, options.pageGuard);
     case "networkRequests":
@@ -3091,6 +3094,49 @@ async function captureScreenshotRegion(params, pageGuard) {
 
   const dataUrl = `data:image/${format};base64,${data}`;
   return { dataUrl, format, region: { x, y, width, height } };
+}
+
+async function printPdf(params, pageGuard) {
+  const tabId = requireTabId(params);
+  const landscape = params.landscape === true;
+  const displayHeaderFooter = params.displayHeaderFooter !== false;
+  const printBackground = params.printBackground !== false;
+  let scale = 1;
+  if (params.scale !== undefined) {
+    scale = requireFiniteNumber(params.scale, "scale");
+    if (!(scale >= 0.1 && scale <= 2)) throw new Error("scale must be between 0.1 and 2");
+  }
+  await pageGuard?.();
+  const beforeTab = await chrome.tabs.get(tabId);
+  const beforeBinding = await currentPageBinding(tabId, beforeTab.url);
+  const data = await withDebugger(tabId, async (target) => {
+    await pageGuard?.();
+    const result = await chrome.debugger.sendCommand(target, "Page.printToPDF", {
+      landscape,
+      displayHeaderFooter,
+      printBackground,
+      scale,
+      preferCSSPageSize: true
+    });
+    if (typeof result?.data !== "string" || result.data.length === 0) {
+      throw new Error("Chrome did not return PDF data");
+    }
+    return result.data;
+  });
+  const afterBinding = await currentPageBinding(tabId);
+  if (afterBinding.documentId !== beforeBinding.documentId
+    || afterBinding.navigationGeneration !== beforeBinding.navigationGeneration) {
+    throw new Error("Print to PDF discarded because the document changed during capture");
+  }
+  await pageGuard?.();
+  assertPdfPayloadSize(data);
+  return { dataUrl: `data:application/pdf;base64,${data}`, format: "pdf" };
+}
+
+function assertPdfPayloadSize(base64Data) {
+  if (typeof base64Data !== "string" || base64Data.length > MAX_PDF_BASE64_CHARS) {
+    throw new Error("PDF response is too large for the local bridge");
+  }
 }
 
 function assertScreenshotPayloadSize(base64Data) {

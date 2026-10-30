@@ -23,7 +23,7 @@ const ORIGIN_SCOPED_BRIDGE_METHODS = new Set([
   "accessibilityTree", "activateTab", "back", "browserBatch", "cdpCommand", "click", "clickElement",
   "closeTab", "domContent", "doubleClick", "evaluate", "fileUploadCommit", "fillElement",
   "findElements", "forward", "getConsoleLogs", "getTab", "hover", "keypress", "moveSequence",
-  "navigate", "networkRequests", "pageText", "readPage", "reload", "resetViewport",
+  "navigate", "networkRequests", "pageText", "printPdf", "readPage", "reload", "resetViewport",
   "pageAssets",
   "webMcpList", "webMcpInvoke",
   "workflowRun",
@@ -249,6 +249,28 @@ export async function pollEvents(since = 0) {
 
 export async function writeDataUrlToFile(dataUrl, outputPath) {
   const { data, mimeType } = decodeSupportedImageDataUrl(dataUrl);
+  await writeFile(outputPath, data);
+  return { bytes: data.length, mimeType, path: outputPath };
+}
+
+const MAX_PDF_ARTIFACT_BYTES = 10 * 1024 * 1024;
+
+export async function writePdfDataUrlToFile(dataUrl, outputPath) {
+  if (typeof dataUrl !== "string") throw new Error("PDF response was not a data URL");
+  const match = /^data:([^;,]+)(;base64)?,(.*)$/u.exec(dataUrl);
+  if (!match) throw new Error("PDF response was not a data URL");
+  const mimeType = match[1].toLowerCase();
+  if (mimeType !== "application/pdf") throw new Error("PDF response used an unsupported MIME type");
+  if (match[2] !== ";base64") throw new Error("PDF response must use base64 encoding");
+  const encoded = match[3];
+  if (encoded.length === 0 || encoded.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/u.test(encoded)) {
+    throw new Error("PDF response contained invalid base64 data");
+  }
+  const data = Buffer.from(encoded, "base64");
+  if (data.length > MAX_PDF_ARTIFACT_BYTES) throw new Error("PDF response is too large to write");
+  if (data.length < 5 || data.subarray(0, 5).toString("latin1") !== "%PDF-") {
+    throw new Error("PDF response did not contain a valid PDF signature");
+  }
   await writeFile(outputPath, data);
   return { bytes: data.length, mimeType, path: outputPath };
 }

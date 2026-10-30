@@ -8,7 +8,8 @@ import {
   requireBridgeCapabilities,
   withBridgePageScopes,
   withoutBridgePageScopes,
-  writeDataUrlToFile
+  writeDataUrlToFile,
+  writePdfDataUrlToFile
 } from "./bridge-client.js";
 import {
   materializeContextText,
@@ -593,6 +594,34 @@ export default async function OpenCodeChromeBridgePlugin() {
           );
           const file = await writeDataUrlToFile(result.dataUrl, outputPath);
           return JSON.stringify({ ...file, region: result.region, format: result.format }, null, 2);
+        }
+      }),
+      chrome_print_pdf: tool({
+        description: "Render a Chrome tab to PDF via Page.printToPDF and save it to a file. Bypasses the native print dialog, which extensions cannot click.",
+        args: {
+          outputPath: schema.string().describe("Absolute or project-relative path for the PDF file."),
+          tabId: schema.number().int().describe("Chrome tab id to print."),
+          landscape: schema.boolean().default(false).describe("Use landscape orientation."),
+          displayHeaderFooter: schema.boolean().default(true).describe("Include default header and footer."),
+          printBackground: schema.boolean().default(true).describe("Include background graphics."),
+          scale: schema.number().min(0.1).max(2).default(1).describe("Print scale factor (0.1-2)."),
+          timeoutMs: schema.number().int().min(1000).max(120000).optional().describe("Bridge timeout in milliseconds.")
+        },
+        async execute(args, context) {
+          const outputPath = await resolveProjectOutputPath(context.directory, args.outputPath, "outputPath");
+          const result = await bridgeCommand(
+            "printPdf",
+            {
+              tabId: args.tabId,
+              landscape: args.landscape ?? false,
+              displayHeaderFooter: args.displayHeaderFooter ?? true,
+              printBackground: args.printBackground ?? true,
+              scale: args.scale ?? 1
+            },
+            { timeoutMs: args.timeoutMs ?? 60000 }
+          );
+          const file = await writePdfDataUrlToFile(result.dataUrl, outputPath);
+          return JSON.stringify({ ...file, format: result.format }, null, 2);
         }
       }),
       chrome_click: tool({
@@ -1385,6 +1414,7 @@ const APPROVAL_METADATA = {
   chrome_workflow_run: (args) => ({ action: "Run one saved browser workflow", id: args.id, name: args.name, shortcut: args.shortcut, totalTimeoutMs: args.totalTimeoutMs }),
   chrome_screenshot: (args) => ({ action: "Capture a screenshot of the page", tabId: args.tabId, outputPath: args.outputPath }),
   chrome_screenshot_region: (args) => ({ action: "Capture a screenshot region of the page", tabId: args.tabId, outputPath: args.outputPath }),
+  chrome_print_pdf: (args) => ({ action: "Render the page to a PDF file", tabId: args.tabId, outputPath: args.outputPath }),
   chrome_downloads_list: (args) => ({ action: "List the user's Chrome downloads", query: args.query })
 };
 
